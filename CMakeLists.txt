@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_C_COMPILER "clang")
 set(CMAKE_CXX_COMPILER "clang++")
 # set(LLVM_DIR "../llvm10/build")
+set(LLVM_ENABLE_RTTI ON)
+set(LLVM_ENABLE_EH ON)
 
 find_package(Clang REQUIRED CONFIG HINTS ${LLVM_DIR} ${LLVM_DIR}/lib/cmake/clang NO_DEFAULT_PATH)
 
@@ -12,6 +14,7 @@ include_directories(${LLVM_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS} SYSTEM)
 link_directories(${LLVM_LIBRARY_DIRS})
 
 file(GLOB SOURCE "./*.cpp")
+
 
 add_executable(ast-interpreter ${SOURCE})
 
