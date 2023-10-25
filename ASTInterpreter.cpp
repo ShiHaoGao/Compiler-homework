@@ -7,52 +7,59 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Tooling/Tooling.h"
 
-using namespace clang;
+//using namespace clang;
+namespace cl = clang;
 
 #include "Environment.h"
 
 class InterpreterVisitor : 
-   public EvaluatedExprVisitor<InterpreterVisitor> {
+public clang::EvaluatedExprVisitor<InterpreterVisitor> {
 public:
-   explicit InterpreterVisitor(const ASTContext &context, Environment * env)
+   explicit InterpreterVisitor(const clang::ASTContext &context, Environment * env)
    : EvaluatedExprVisitor(context), mEnv(env) {}
    virtual ~InterpreterVisitor() {}
 
-   virtual void VisitBinaryOperator (BinaryOperator * bop) {
+   virtual void VisitBinaryOperator (cl::BinaryOperator * bop) {
 	   VisitStmt(bop);
 	   mEnv->binop(bop);
    }
-   virtual void VisitDeclRefExpr(DeclRefExpr * expr) {
+   virtual void VisitDeclRefExpr(cl::DeclRefExpr * expr) {
 	   VisitStmt(expr);
 	   mEnv->declref(expr);
    }
-   virtual void VisitCastExpr(CastExpr * expr) {
+
+    virtual void VisitIntegerLiteral(cl::IntegerLiteral *literal) {
+        mEnv->evalLiteral(literal);
+    }
+
+   virtual void VisitCastExpr(cl::CastExpr * expr) {
 	   VisitStmt(expr);
 	   mEnv->cast(expr);
    }
-   virtual void VisitCallExpr(CallExpr * call) {
+   virtual void VisitCallExpr(clang::CallExpr * call) {
 	   VisitStmt(call);
 	   mEnv->call(call);
    }
-   virtual void VisitDeclStmt(DeclStmt * declstmt) {
+   virtual void VisitDeclStmt(clang::DeclStmt * declstmt) {
+       VisitStmt(declstmt);
 	   mEnv->decl(declstmt);
    }
 private:
    Environment * mEnv;
 };
 
-class InterpreterConsumer : public ASTConsumer {
+class InterpreterConsumer : public clang::ASTConsumer {
 public:
-   explicit InterpreterConsumer(const ASTContext& context) : mEnv(),
+   explicit InterpreterConsumer(const clang::ASTContext& context) : mEnv(),
    	   mVisitor(context, &mEnv) {
    }
    virtual ~InterpreterConsumer() {}
 
-   virtual void HandleTranslationUnit(clang::ASTContext &Context) {
-	   TranslationUnitDecl * decl = Context.getTranslationUnitDecl();
+   void HandleTranslationUnit(clang::ASTContext &Context) override {
+	   clang::TranslationUnitDecl * decl = Context.getTranslationUnitDecl();
 	   mEnv.init(decl);
 
-	   FunctionDecl * entry = mEnv.getEntry();
+	   clang::FunctionDecl * entry = mEnv.getEntry();
 	   mVisitor.VisitStmt(entry->getBody());
   }
 private:
@@ -60,10 +67,10 @@ private:
    InterpreterVisitor mVisitor;
 };
 
-class InterpreterClassAction : public ASTFrontendAction {
+class InterpreterClassAction : public clang::ASTFrontendAction {
 public: 
-  virtual std::unique_ptr<clang::ASTConsumer> CreateASTConsumer(
-    clang::CompilerInstance &Compiler, llvm::StringRef InFile) {
+  std::unique_ptr<clang::ASTConsumer> CreateASTConsumer(
+    clang::CompilerInstance &Compiler, llvm::StringRef InFile) override {
     return std::unique_ptr<clang::ASTConsumer>(
         new InterpreterConsumer(Compiler.getASTContext()));
   }
