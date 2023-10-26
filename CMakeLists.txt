@@ -15,7 +15,6 @@ link_directories(${LLVM_LIBRARY_DIRS})
 
 file(GLOB SOURCE "./*.cpp")
 
-
 add_executable(ast-interpreter ${SOURCE})
 
 set( LLVM_LINK_COMPONENTS

@@ -15,6 +15,7 @@ namespace cl = clang;
 class StackFrame {
    /// StackFrame maps Variable Declaration to Value
    /// Which are either integer or addresses (also represented using an Integer value)
+   // frame中存Decl, Stmt语法树结点 -> value
    std::map<cl::Decl*, int64_t> mVars;
    std::map<cl::Stmt*, int64_t> mExprs;
    /// The current stmt
@@ -25,21 +26,26 @@ public:
 
    void bindDecl(cl::Decl* decl, int val) {
       mVars[decl] = val;
-   }    
+   }
+
    int getDeclVal(cl::Decl * decl) {
       assert (mVars.find(decl) != mVars.end());
       return mVars.find(decl)->second;
    }
+
    void bindStmt(cl::Stmt * stmt, int val) {
 	   mExprs[stmt] = val;
    }
+
    int getStmtVal(cl::Stmt * stmt) {
 	   assert (mExprs.find(stmt) != mExprs.end());
 	   return mExprs[stmt];
    }
+
    void setPC(cl::Stmt * stmt) {
 	   mPC = stmt;
    }
+
    cl::Stmt * getPC() {
 	   return mPC;
    }
@@ -80,6 +86,16 @@ public:
 			   else if (fdecl->getName().equals("PRINT")) mOutput = fdecl;
 			   else if (fdecl->getName().equals("main")) mEntry = fdecl;
 		   }
+           // 处理全局变量，将全局变量赋值
+           if (auto *vdecl = dyn_cast<cl::VarDecl>(*i)) {
+               int val = 0;
+                if (vdecl->hasInit()) {
+//                    val = mStack.back().getStmtVal(vdecl->getInit()) ;
+//                    mStack.back().bindDecl(vdecl, val);
+                }
+                else
+                    mStack.back().bindDecl(vdecl, val);
+           }
 	   }
 	   mStack.push_back(StackFrame());
    }
@@ -91,8 +107,8 @@ public:
    void evalLiteral(cl::Expr *literalExpr) {
        if (auto* literal = cl::dyn_cast<cl::IntegerLiteral>(literalExpr)) {
            mStack.back().bindStmt(literal, literal->getValue().getSExtValue());
+//           llvm::errs() << " 1 \n";
        }
-
    }
 
    /// !TODO Support comparison operation
@@ -114,9 +130,17 @@ public:
 	   for (cl::DeclStmt::decl_iterator it = declstmt->decl_begin(), ie = declstmt->decl_end();
 			   it != ie; ++ it) {
 		   cl::Decl * decl = *it;
-		   if (auto * vardecl = dyn_cast<cl::VarDecl>(decl)) {
-			   mStack.back().bindDecl(vardecl, 0);
-		   }
+           if (auto * vardecl = dyn_cast<cl::VarDecl>(decl)) {
+               if (vardecl->hasInit()) {
+                   mStack.back().bindDecl(
+                           vardecl, mStack.back().getStmtVal(vardecl->getInit()));
+               } else {
+                   mStack.back().bindDecl(vardecl, 0); // 新定义的变量初始化为 0
+               }
+           }
+
+
+
 	   }
    }
 

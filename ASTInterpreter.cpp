@@ -36,35 +36,54 @@ public:
 	   VisitStmt(expr);
 	   mEnv->cast(expr);
    }
+
    virtual void VisitCallExpr(clang::CallExpr * call) {
 	   VisitStmt(call);
 	   mEnv->call(call);
    }
+
    virtual void VisitDeclStmt(clang::DeclStmt * declstmt) {
        VisitStmt(declstmt);
 	   mEnv->decl(declstmt);
    }
+
+
 private:
    Environment * mEnv;
 };
 
 class InterpreterConsumer : public clang::ASTConsumer {
 public:
-   explicit InterpreterConsumer(const clang::ASTContext& context) : mEnv(),
+    explicit InterpreterConsumer(const clang::ASTContext& context) : mEnv(),
    	   mVisitor(context, &mEnv) {
-   }
-   virtual ~InterpreterConsumer() {}
+    }
+    virtual ~InterpreterConsumer() {}
 
-   void HandleTranslationUnit(clang::ASTContext &Context) override {
-	   clang::TranslationUnitDecl * decl = Context.getTranslationUnitDecl();
-	   mEnv.init(decl);
+    void HandleTranslationUnit(clang::ASTContext &Context) override {
+	    clang::TranslationUnitDecl * decl = Context.getTranslationUnitDecl();
+
+
+        // 处理全局变量
+//        for (auto i = decl->decls_begin(),
+//                     e = decl->decls_end();
+//             i != e; ++i) {
+//            if (auto* vdecl = dyn_cast<cl::VarDecl>(*i)) {
+//                // 如果有init变量的expr结点，则visit之，将expr
+//                if (vdecl->hasInit()) {
+//                    mVisitor.Visit(vdecl->getInit());//
+//                }
+//            }
+//        }
+
+       mEnv.init(decl); // 把runtime的函数和main函数都装入Env中，然后开一个main的frame。
 
 	   clang::FunctionDecl * entry = mEnv.getEntry();
 	   mVisitor.VisitStmt(entry->getBody());
-  }
+    }
 private:
-   Environment mEnv;
-   InterpreterVisitor mVisitor;
+
+    Environment mEnv;
+    InterpreterVisitor mVisitor;
 };
 
 class InterpreterClassAction : public clang::ASTFrontendAction {
