@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.1.0)
 project(assign1)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_COMPILER "clang")
 set(CMAKE_CXX_COMPILER "clang++")
 # set(LLVM_DIR "../llvm10/build")

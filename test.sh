@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
 #cd build || exit
-cmake --build build
+#cmake --build build
 
-test_file="./test/test00.c"
+test_file="./test/test01.c"
 
 echo "================================AST================================"
 

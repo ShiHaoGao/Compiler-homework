@@ -9,8 +9,9 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Tooling/Tooling.h"
 
-//using namespace clang;
+using namespace clang;
 namespace cl = clang;
+
 
 class StackFrame {
    /// StackFrame maps Variable Declaration to Value
@@ -24,22 +25,43 @@ public:
    StackFrame() : mVars(), mExprs(), mPC() {
    }
 
-   void bindDecl(cl::Decl* decl, int val) {
+   StackFrame(StackFrame const& sf) {
+       mVars = sf.mVars;
+       mExprs = sf.mExprs;
+       mPC = sf.mPC;
+   }
+
+   StackFrame(StackFrame&& sf) {
+       mVars = std::move(sf.mVars);
+       mExprs = std::move(sf.mExprs);
+       mPC = sf.mPC;
+   }
+
+
+   void bindDecl(cl::Decl* decl, int64_t val) {
       mVars[decl] = val;
    }
 
-   int getDeclVal(cl::Decl * decl) {
+    int64_t getDeclVal(cl::Decl * decl) {
       assert (mVars.find(decl) != mVars.end());
       return mVars.find(decl)->second;
    }
 
-   void bindStmt(cl::Stmt * stmt, int val) {
+   bool hasDeclVal(Decl* decl) const {
+       return mVars.find(decl) != mVars.end();
+   }
+
+   void bindStmt(cl::Stmt * stmt, int64_t val) {
 	   mExprs[stmt] = val;
    }
 
-   int getStmtVal(cl::Stmt * stmt) {
+    int64_t getStmtVal(cl::Stmt * stmt) {
 	   assert (mExprs.find(stmt) != mExprs.end());
 	   return mExprs[stmt];
+   }
+
+   bool hasStmtVal(Stmt* stmt) const {
+       return mExprs.find(stmt) != mExprs.end();
    }
 
    void setPC(cl::Stmt * stmt) {
@@ -52,7 +74,7 @@ public:
 };
 
 /// Heap maps address to a value
-/*
+
 class Heap {
 public:
    int Malloc(int size) ;
@@ -60,44 +82,52 @@ public:
    void Update(int addr, int val) ;
    int get(int addr);
 };
-*/
+
 
 class Environment {
-   std::vector<StackFrame> mStack;
-
-   cl::FunctionDecl * mFree;				/// Declartions to the built-in functions
-   cl::FunctionDecl * mMalloc;
-   cl::FunctionDecl * mInput;
-   cl::FunctionDecl * mOutput;
+    std::vector<StackFrame> mStack;
+    Heap mHeap;
+    std::map<Decl*, int64_t> gVals;
+    cl::FunctionDecl * mFree;				/// Declartions to the built-in functions
+    cl::FunctionDecl * mMalloc;
+    cl::FunctionDecl * mInput;
+    cl::FunctionDecl * mOutput;
 
    cl::FunctionDecl * mEntry;
 public:
    /// Get the declartions to the built-in functions
-   Environment() : mStack(), mFree(NULL), mMalloc(NULL), mInput(NULL), mOutput(NULL), mEntry(NULL) {
+   Environment() : mStack(), mHeap(), gVals(), mFree(NULL), mMalloc(NULL), mInput(NULL), mOutput(NULL), mEntry(NULL) {
+//       mStack.emplace_back(); // 全局frame
    }
 
    /// Initialize the Environment
    void init(cl::TranslationUnitDecl * unit) {
 	   for (cl::TranslationUnitDecl::decl_iterator i =unit->decls_begin(), e = unit->decls_end(); i != e; ++ i) {
-		   if (auto * fdecl = dyn_cast<cl::FunctionDecl>(*i) ) {
-			   if (fdecl->getName().equals("FREE")) mFree = fdecl;
-			   else if (fdecl->getName().equals("MALLOC")) mMalloc = fdecl;
-			   else if (fdecl->getName().equals("GET")) mInput = fdecl;
-			   else if (fdecl->getName().equals("PRINT")) mOutput = fdecl;
-			   else if (fdecl->getName().equals("main")) mEntry = fdecl;
-		   }
-           // 处理全局变量，将全局变量赋值
-           if (auto *vdecl = dyn_cast<cl::VarDecl>(*i)) {
-               int val = 0;
-                if (vdecl->hasInit()) {
-//                    val = mStack.back().getStmtVal(vdecl->getInit()) ;
-//                    mStack.back().bindDecl(vdecl, val);
-                }
-                else
-                    mStack.back().bindDecl(vdecl, val);
+           if (auto *fdecl = llvm::dyn_cast<cl::FunctionDecl>(*i)) {
+               if (fdecl->getName().equals("FREE")) mFree = fdecl;
+               else if (fdecl->getName().equals("MALLOC")) mMalloc = fdecl;
+               else if (fdecl->getName().equals("GET")) mInput = fdecl;
+               else if (fdecl->getName().equals("PRINT")) mOutput = fdecl;
+               else if (fdecl->getName().equals("main")) mEntry = fdecl;
            }
-	   }
-	   mStack.push_back(StackFrame());
+           if (auto *vdecl = cl::dyn_cast<cl::VarDecl>(*i)) {
+
+               int64_t val = 0;
+               if (cl::Expr *expr = vdecl->getInit()) {
+                   if (auto *iLiteral = cl::dyn_cast<cl::IntegerLiteral>(expr)) {
+                       val = iLiteral->getValue().getSExtValue();
+                   } else if (auto *cLiteral = cl::dyn_cast<cl::CharacterLiteral>(expr)) {
+
+                   }
+                   gVals[vdecl] = val;
+//                   mStack.back().bindDecl(vdecl, val);
+               }
+           }
+
+       }
+//       mStack.pop_back();
+       // main的frame
+	   mStack.emplace_back();
    }
 
    cl::FunctionDecl * getEntry() {
@@ -138,21 +168,23 @@ public:
                    mStack.back().bindDecl(vardecl, 0); // 新定义的变量初始化为 0
                }
            }
-
-
-
 	   }
    }
 
-   void declref(cl::DeclRefExpr * declref) {
-	   mStack.back().setPC(declref);
-	   if (declref->getType()->isIntegerType()) {
-		   cl::Decl* decl = declref->getFoundDecl();
-
-		   int val = mStack.back().getDeclVal(decl);
-		   mStack.back().bindStmt(declref, val);
+    void declref(cl::DeclRefExpr * declref) {
+        // 对变量声明的引用，在本作用域，或者在全局作用域。
+	    if (declref->getType()->isIntegerType()) {
+		    cl::Decl* decl = declref->getFoundDecl();
+            int64_t val = 0;
+            if (mStack.back().hasDeclVal(decl))
+                val = mStack.back().getDeclVal(decl);
+            else if (gVals.find(decl) != gVals.end())
+                val = gVals[decl];
+            else
+                llvm::errs() << "Can't find declVal in current frame's mVals and gVals!\n";
+		    mStack.back().bindStmt(declref, val);
 	   }
-   }
+    }
 
    void cast(cl::CastExpr * castexpr) {
 	   mStack.back().setPC(castexpr);
@@ -164,23 +196,66 @@ public:
    }
 
    /// !TODO Support Function Call
-   void call(cl::CallExpr * callexpr) {
-	   mStack.back().setPC(callexpr);
-	   int val = 0;
-	   cl::FunctionDecl * callee = callexpr->getDirectCallee();
-	   if (callee == mInput) {
-		  llvm::errs() << "Please Input an Integer Value : ";
-		  scanf("%d", &val);
+    void call(cl::CallExpr * callExpr) {
+	    cl::FunctionDecl * callee = callExpr->getDirectCallee();
+	    if (callee == mInput) {
+            int val = 0;
+		    llvm::errs() << "Please Input an Integer Value : ";
+		    scanf("%d", &val);
+		    mStack.back().bindStmt(callExpr, val);
+	    } else if (callee == mOutput) {
+            int val = 0;
+		    cl::Expr * decl = callExpr->getArg(0);
+		    val = mStack.back().getStmtVal(decl);
+		    llvm::errs() << val;
+	    } else {
+            /// You could add your code here for Function call Return
+		    // 新建Frame
+            auto* newFrame = new StackFrame();
+            // bind parameters
+            unsigned argsNum = callExpr->getNumArgs();
+            for (unsigned i = 0; i < argsNum; ++i) {
+                Decl * param = callee->getParamDecl(i);
+                Expr * arg = callExpr->getArg(i);
+                int64_t val = mStack.back().getStmtVal(arg);
+                newFrame->bindDecl(param, val);
+            }
+            // 设置新Frame的返回pc值
+            newFrame->setPC(callExpr);
+            // 开return val的空间
+            // Expr是ValueStmt，包含type和value的stmt，因此这里用bindStmt。
+            newFrame->bindStmt(callExpr, 0);
+            // 将newFrame 压入Stack中。
+            mStack.push_back(*newFrame);
 
-		  mStack.back().bindStmt(callexpr, val);
-	   } else if (callee == mOutput) {
-		   cl::Expr * decl = callexpr->getArg(0);
-		   val = mStack.back().getStmtVal(decl);
-		   llvm::errs() << val;
-	   } else {
-		   /// You could add your code here for Function call Return
-	   }
-   }
+
+            //
+	    }
+    }
+
+    // 活动记录结束
+    void freeFrame(CallExpr* callExpr) {
+        // 拿到返回值
+        int64_t val = mStack.back().getStmtVal(callExpr);
+
+        // 释放frame
+        mStack.pop_back();
+        mStack.back().bindStmt(callExpr, val);
+    }
+
+    void callReturn(ReturnStmt* returnStmt) {
+        // 拿到返回pc值，需要将返回值bind到pc的stmt上，
+        auto* returnExpr = mStack.back().getPC();
+        // 拿到返回值
+        auto expr = returnStmt->getRetValue();
+        auto val = mStack.back().getStmtVal(expr);
+
+        // 进行bind pc -> val
+        mStack.back().bindStmt(mStack.back().getPC(), val);
+   };
 };
 
+class ReturnException : public std::exception{
+
+};
 

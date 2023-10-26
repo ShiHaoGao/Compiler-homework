@@ -7,8 +7,9 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Tooling/Tooling.h"
 
-//using namespace clang;
+using namespace clang;
 namespace cl = clang;
+
 
 #include "Environment.h"
 
@@ -40,13 +41,22 @@ public:
    virtual void VisitCallExpr(clang::CallExpr * call) {
 	   VisitStmt(call);
 	   mEnv->call(call);
+       auto * body = call->getDirectCallee()->getBody();
+       // 转移控制
+       VisitStmt(body);
+       // 控制返回，提取参数，清除frame
+       mEnv->freeFrame(call);
    }
 
-   virtual void VisitDeclStmt(clang::DeclStmt * declstmt) {
+   virtual void VisitDeclStmt(DeclStmt * declstmt) {
        VisitStmt(declstmt);
 	   mEnv->decl(declstmt);
    }
 
+   virtual void VisitReturnStmt(ReturnStmt* returnStmt) {
+       VisitStmt(returnStmt);
+       mEnv->callReturn(returnStmt);
+   }
 
 private:
    Environment * mEnv;
@@ -62,23 +72,16 @@ public:
     void HandleTranslationUnit(clang::ASTContext &Context) override {
 	    clang::TranslationUnitDecl * decl = Context.getTranslationUnitDecl();
 
-
-        // 处理全局变量
-//        for (auto i = decl->decls_begin(),
-//                     e = decl->decls_end();
-//             i != e; ++i) {
-//            if (auto* vdecl = dyn_cast<cl::VarDecl>(*i)) {
-//                // 如果有init变量的expr结点，则visit之，将expr
-//                if (vdecl->hasInit()) {
-//                    mVisitor.Visit(vdecl->getInit());//
-//                }
-//            }
-//        }
-
        mEnv.init(decl); // 把runtime的函数和main函数都装入Env中，然后开一个main的frame。
 
 	   clang::FunctionDecl * entry = mEnv.getEntry();
-	   mVisitor.VisitStmt(entry->getBody());
+//       mVisitor.VisitStmt(entry->getBody());
+
+        try {
+            mVisitor.VisitStmt(entry->getBody());
+        } catch (ReturnException e) {
+        }
+
     }
 private:
 
