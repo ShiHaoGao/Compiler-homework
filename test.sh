@@ -3,7 +3,7 @@
 #cd build || exit
 #cmake --build build
 
-test_file="./test/test10.c"
+test_file="./test/test16.c"
 
 echo "================================AST================================"
 

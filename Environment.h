@@ -19,6 +19,7 @@ class StackFrame {
     // frame中存Decl, Stmt语法树结点 -> value
     std::map<cl::Decl *, int64_t> mVars;
     std::map<cl::Stmt *, int64_t> mExprs;
+    std::map<Decl *, std::vector<int64_t>> mArrayVars;
     /// The current stmt
     cl::Stmt *mPC;
 
@@ -29,12 +30,14 @@ public:
     StackFrame(StackFrame const &sf) {
         mVars = sf.mVars;
         mExprs = sf.mExprs;
+        mArrayVars = sf.mArrayVars;
         mPC = sf.mPC;
     }
 
-    StackFrame(StackFrame &&sf) {
+    StackFrame(StackFrame &&sf) noexcept {
         mVars = std::move(sf.mVars);
         mExprs = std::move(sf.mExprs);
+        mArrayVars = std::move(sf.mArrayVars);
         mPC = sf.mPC;
     }
 
@@ -64,6 +67,25 @@ public:
     bool hasStmtVal(Stmt *stmt) const {
         return mExprs.find(stmt) != mExprs.end();
     }
+
+    void bindDeclArr(Decl *decl, int size = 0) {
+        mArrayVars[decl] = std::vector<int64_t>(size);
+    }
+
+    int64_t getDeclArrVar(Decl *decl) {
+        assert(mArrayVars.find(decl) != mArrayVars.end());
+        return (int64_t) (mArrayVars.find(decl)->second).data();
+    }
+
+    //    int64_t getDeclArrVal(Decl* decl, int i) {
+    //        assert(mArrayVars.find(decl) != mArrayVars.end());
+    //        return mArrayVars[decl][i];
+    //    }
+
+    bool hasDeclArr(Decl *decl) const {
+        return mArrayVars.find(decl) != mArrayVars.end();
+    }
+
 
     void setPC(cl::Stmt *stmt) {
         mPC = stmt;
@@ -150,21 +172,31 @@ public:
         cl::Expr *left = bop->getLHS();
         cl::Expr *right = bop->getRHS();
 
-        auto bOpc = bop->getOpcode();
+
+        int64_t rVal = mStack.back().getStmtVal(right);
+
 
         if (bop->isAssignmentOp()) {
-            int val = mStack.back().getStmtVal(right);
-            mStack.back().bindStmt(left, val);
+
+//            mStack.back().bindStmt(left, rVal);
             if (auto *declexpr = dyn_cast<cl::DeclRefExpr>(left)) {
                 cl::Decl *decl = declexpr->getFoundDecl();
-                mStack.back().bindDecl(decl, val);
+                mStack.back().bindDecl(decl, rVal);
+            }
+            else if (auto *arrExpr = dyn_cast<ArraySubscriptExpr>(left)) {
+                auto* ptr = (int64_t*)mStack.back().getStmtVal(arrExpr->getBase());
+                int64_t idx = mStack.back().getStmtVal(arrExpr->getIdx());
+                *(ptr + idx) = rVal;
+            }
+            else if (auto *uop = dyn_cast<UnaryOperator>(left)) {
+
             }
             return;
         }
 
         // Computing binary operator
+        auto bOpc = bop->getOpcode();
         auto lVal = mStack.back().getStmtVal(left);
-        auto rVal = mStack.back().getStmtVal(right);
         int64_t result = 0;
         switch (bOpc) {
             case BO_Add:
@@ -180,23 +212,21 @@ public:
                 result = lVal / rVal;
                 break;
             case BO_LT:
-                result = (lVal < rVal) ? 1:0;
+                result = (lVal < rVal) ? 1 : 0;
                 break;
             case BO_GT:
-                result = (lVal > rVal) ? 1:0;
+                result = (lVal > rVal) ? 1 : 0;
                 break;
             case BO_EQ:
-                result = (lVal == rVal) ? 1:0;
+                result = (lVal == rVal) ? 1 : 0;
                 break;
         }
 
 
         mStack.back().bindStmt(bop, result);
-
-
     }
 
-    void unOp(UnaryOperator* unop) {
+    void unOp(UnaryOperator *unop) {
         auto unOpc = unop->getOpcode();
         auto right = unop->getSubExpr();
         auto rVal = mStack.back().getStmtVal(right);
@@ -208,8 +238,8 @@ public:
         mStack.back().bindStmt(unop, result);
     }
 
-    bool isCondTrue(Expr* cond) {
-//        auto cond = ifStmt->getCond();
+    bool isCondTrue(Expr *cond) {
+        //        auto cond = ifStmt->getCond();
         int64_t condition = mStack.back().getStmtVal(cond);
         if (condition == 1)
             return true;
@@ -222,20 +252,36 @@ public:
              it != ie; ++it) {
             cl::Decl *decl = *it;
             if (auto *vardecl = dyn_cast<cl::VarDecl>(decl)) {
-                if (vardecl->hasInit()) {
-                    mStack.back().bindDecl(
-                            vardecl, mStack.back().getStmtVal(vardecl->getInit()));
+                auto type = vardecl->getType();
+
+                // 栈上数组 int a[3];
+                if (type->isArrayType()) {
+                    auto *array =
+                            dyn_cast<ConstantArrayType>(type.getTypePtr());
+                    int size = (int) array->getSize().getLimitedValue();
+                    mStack.back().bindDeclArr(vardecl, size);
+                }
+                // 变量 int a, int a = 1, int *a, int *a = malloc();
+                // 这四中操作的做法是一样的。
+                else if (type->isIntegerType() || type->isPointerType()) {
+                    if (vardecl->hasInit()) {
+                        mStack.back().bindDecl(
+                                vardecl, mStack.back().getStmtVal(vardecl->getInit()));
+                    } else {
+                        mStack.back().bindDecl(vardecl, 0);// 新定义的变量初始化为 0
+                    }
                 } else {
-                    mStack.back().bindDecl(vardecl, 0);// 新定义的变量初始化为 0
+                    llvm::errs() << "Unknown decl. \n";
                 }
             }
         }
     }
 
     void declref(cl::DeclRefExpr *declref) {
+        auto type = declref->getType();
         // 对变量声明的引用，在本作用域，或者在全局作用域。
-        if (declref->getType()->isIntegerType()) {
-            cl::Decl *decl = declref->getFoundDecl();
+        if (type->isIntegerType() || type->isPointerType()) {
+            auto *decl = declref->getFoundDecl();
             int64_t val = 0;
             // 当前frame
             if (mStack.back().hasDeclVal(decl))
@@ -246,15 +292,52 @@ public:
             else
                 llvm::errs() << "Can't find declVal in current frame's mVals and gVals!\n";
             mStack.back().bindStmt(declref, val);
+        } else if (type->isConstantArrayType()) {
+            auto *decl = declref->getFoundDecl();
+            int64_t ptr = 0;
+            // 如果栈上存在这个数组的decl
+            // 也就是说，这个decl在mArrayVars中，那么用栈上的数组地址
+            if (mStack.back().hasDeclArr(decl))
+                ptr = mStack.back().getDeclArrVar(decl);
+            // else：数组的数据内容在堆上，
+            else if (mStack.back().hasDeclVal(decl)) {
+                ptr = mStack.back().getDeclVal(decl);
+            } else {
+                llvm::errs() << "Can't ref array on stack and heap. \n";
+            }
+            mStack.back().bindStmt(declref, ptr);
         }
     }
 
+
+    // 这里无法区分数组地址指向的内容是在栈上还是堆上
+    // 将a[i]视为右值。没有将地址加入mExprs中
+    // 因此，在a[i]视为左值时，也就是assign的时候，需要重新计算地址。
+    void arraySubscript(ArraySubscriptExpr *arrayExpr) {
+        auto *base = arrayExpr->getBase();
+        auto *arr = (int64_t *) mStack.back().getStmtVal(base);
+        int64_t idx = mStack.back().getStmtVal(arrayExpr->getIdx());
+        int64_t val = *(arr + idx);
+        mStack.back().bindStmt(arrayExpr, val);
+    }
+
     void cast(cl::CastExpr *castexpr) {
-        if (castexpr->getType()->isIntegerType()) {
+        auto type = castexpr->getType();
+        // 这里必须把functionPointer去掉，因为对于调用的函数，我们并没有将其expr加入到mExpr中
+        // 而是直接控制ast树的访问顺序，直接去解释执行其函数。
+        // 与编译器中，将函数视为指针，也保存在expr中是不同的。
+        // 究其原因是因为我们写的是解释器，而不是编译器
+        if (type->isFunctionPointerType())
+            return ;
+        if (type->isIntegerType() || type->isPointerType() || type->isConstantArrayType()) {
             cl::Expr *expr = castexpr->getSubExpr();
-            int val = mStack.back().getStmtVal(expr);
+            int64_t val = mStack.back().getStmtVal(expr);
             mStack.back().bindStmt(castexpr, val);
         }
+        //        else if (castexpr->getType()->isArrayType()) {
+        //            auto expr = castexpr->getSubExpr();
+        //
+        //        }
     }
 
     bool isBuiltinCall(CallExpr *callExpr) {
@@ -320,10 +403,14 @@ public:
         auto val = mStack.back().getStmtVal(expr);
 
         // 进行bind pc -> val
-        int tmp = mStack.back().getStmtVal(callExpr);
-        //        llvm::errs() << "return val : " << tmp << "\n";
-        mStack.back().bindStmt(callExpr, val);
-        //        llvm::errs() << "return val : " << val << "\n";
+        // 如果是main，则不做这个操作，因为没有给main frame设置pc值。
+        if (mStack.size() != 1) {
+            int tmp = mStack.back().getStmtVal(callExpr);
+            //        llvm::errs() << "return val : " << tmp << "\n";
+            mStack.back().bindStmt(callExpr, val);
+            //        llvm::errs() << "return val : " << val << "\n";
+        }
+
     };
 };
 

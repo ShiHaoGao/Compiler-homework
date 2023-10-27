@@ -34,6 +34,11 @@ public:
         mEnv->declref(expr);
     }
 
+    virtual void VisitArraySubscriptExpr(ArraySubscriptExpr *expr) {
+        VisitStmt(expr);
+        mEnv->arraySubscript(expr);
+    }
+
     virtual void VisitIntegerLiteral(cl::IntegerLiteral *literal) {
         mEnv->evalLiteral(literal);
     }
@@ -67,6 +72,7 @@ public:
     virtual void VisitReturnStmt(ReturnStmt *returnStmt) {
         VisitStmt(returnStmt);
         mEnv->callReturn(returnStmt);
+//        throw ReturnException{};
     }
 
     virtual void VisitIfStmt(IfStmt* ifStmt) {
@@ -99,6 +105,23 @@ public:
         }
 
 
+    }
+
+    virtual void VisitForStmt(ForStmt* forStmt) {
+        auto cond = forStmt->getCond();
+
+        auto inc = forStmt->getInc();
+        if (auto init = forStmt->getInit())
+            Visit(init);
+        if (cond)
+            Visit(cond);
+        while (mEnv->isCondTrue(cond)) {
+            if (auto body = forStmt->getBody())
+                Visit(body);
+            else break;
+            if (inc) Visit(inc);
+            if (cond) Visit(cond);
+        }
     }
 
 private:
