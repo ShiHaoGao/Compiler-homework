@@ -208,8 +208,8 @@ public:
         mStack.back().bindStmt(unop, result);
     }
 
-    bool isCondTrue(IfStmt* ifStmt) {
-        auto cond = ifStmt->getCond();
+    bool isCondTrue(Expr* cond) {
+//        auto cond = ifStmt->getCond();
         int64_t condition = mStack.back().getStmtVal(cond);
         if (condition == 1)
             return true;

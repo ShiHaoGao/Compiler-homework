@@ -73,7 +73,7 @@ public:
         auto cond = ifStmt->getCond();
         Visit(cond);
 
-        if (mEnv->isCondTrue(ifStmt)) {
+        if (mEnv->isCondTrue(cond)) {
             auto thenStmt = ifStmt->getThen();
             // 如果存在then stmt，则访问
             if (thenStmt)
@@ -89,6 +89,15 @@ public:
     }
 
     virtual void VisitWhileStmt(WhileStmt* whileStmt) {
+
+        auto cond = whileStmt->getCond();
+        Visit(cond);
+        while (mEnv->isCondTrue(cond)) {
+            if (auto* whileBody = whileStmt->getBody())
+                Visit(whileBody);
+            Visit(cond);
+        }
+
 
     }
 
