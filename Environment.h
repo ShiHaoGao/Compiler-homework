@@ -1,7 +1,6 @@
 //==--- tools/clang-check/ClangInterpreter.cpp - Clang Interpreter tool --------------===//
 //===----------------------------------------------------------------------===//
 #include <stdio.h>
-
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -17,36 +16,47 @@ class StackFrame {
     /// StackFrame maps Variable Declaration to Value
     /// Which are either integer or addresses (also represented using an Integer value)
     // frame中存Decl, Stmt语法树结点 -> value
-    std::map<cl::Decl *, int64_t> mVars;
-    std::map<cl::Stmt *, int64_t> mExprs;
-    std::map<Decl *, std::vector<int64_t>> mArrayVars;
+    std::map<Decl*, int> mVars;
+    std::map<Stmt*, int> mExprs;
+    std::map<int, int> mem;
+    int idx;  // [0, 100)
     /// The current stmt
     cl::Stmt *mPC;
 
 public:
-    StackFrame() : mVars(), mExprs(), mPC() {
+    StackFrame() : mVars(), mExprs(), mem(), idx(0), mPC() {
     }
+
 
     StackFrame(StackFrame const &sf) {
         mVars = sf.mVars;
         mExprs = sf.mExprs;
-        mArrayVars = sf.mArrayVars;
+        mem = sf.mem;
+        idx = sf.idx;
         mPC = sf.mPC;
     }
 
     StackFrame(StackFrame &&sf) noexcept {
         mVars = std::move(sf.mVars);
         mExprs = std::move(sf.mExprs);
-        mArrayVars = std::move(sf.mArrayVars);
+        mem = std::move(sf.mem);
+        idx = sf.idx;
         mPC = sf.mPC;
     }
 
+    bool isBadAccess(int addr) {
+        if (addr >= 100 || addr < 0) {
+            llvm::errs() << "Bad Stack memory access.\n";
+            return true;
+        }
+        return false;
+    }
 
-    void bindDecl(cl::Decl *decl, int64_t val) {
+    void bindDecl(cl::Decl *decl, int val) {
         mVars[decl] = val;
     }
 
-    int64_t getDeclVal(cl::Decl *decl) {
+    int getDeclVal(cl::Decl *decl) {
         assert(mVars.find(decl) != mVars.end());
         return mVars.find(decl)->second;
     }
@@ -55,11 +65,11 @@ public:
         return mVars.find(decl) != mVars.end();
     }
 
-    void bindStmt(cl::Stmt *stmt, int64_t val) {
+    void bindStmt(cl::Stmt *stmt, int val) {
         mExprs[stmt] = val;
     }
 
-    int64_t getStmtVal(cl::Stmt *stmt) {
+    int getStmtVal(cl::Stmt *stmt) {
         assert(mExprs.find(stmt) != mExprs.end());
         return mExprs[stmt];
     }
@@ -68,24 +78,27 @@ public:
         return mExprs.find(stmt) != mExprs.end();
     }
 
-    void bindDeclArr(Decl *decl, int size = 0) {
-        mArrayVars[decl] = std::vector<int64_t>(size);
+    int allocStackMem(int size) {
+        // TODO: 判断是否out of boundary
+        auto addr = idx;
+        for (int i = 0; i < size; i++) {
+            mem.insert({idx++, 0});
+        }
+        return addr;
     }
 
-    int64_t getDeclArrVar(Decl *decl) {
-        assert(mArrayVars.find(decl) != mArrayVars.end());
-        return (int64_t) (mArrayVars.find(decl)->second).data();
+    int get(int addr) {
+        if (isBadAccess(addr))
+            exit(-1);
+
+        return mem[addr];
     }
 
-    //    int64_t getDeclArrVal(Decl* decl, int i) {
-    //        assert(mArrayVars.find(decl) != mArrayVars.end());
-    //        return mArrayVars[decl][i];
-    //    }
-
-    bool hasDeclArr(Decl *decl) const {
-        return mArrayVars.find(decl) != mArrayVars.end();
+    void update(int addr, int val) {
+        if (isBadAccess(addr))
+            exit(-1);
+        mem[addr] = val;
     }
-
 
     void setPC(cl::Stmt *stmt) {
         mPC = stmt;
@@ -100,47 +113,65 @@ public:
 
 class Heap {
 private:
-    std::vector<int64_t *> mem;
+    std::map<int, int> mem;
+    int idx; // [100, ...)
 
 public:
-    Heap() : mem() {}
+    Heap() : mem(), idx(100) {}
 
-    int64_t *Malloc(int64_t size) {
-        auto *p = (int64_t *) malloc(size);
-        mem.push_back(p);
-        return p;
+    bool isBadAccess(int addr) {
+        if (addr < 100) {
+            llvm::errs() << "Bad Heap memory access.\n";
+            return true;
+        }
+        return false;
     }
 
-    void Free(int64_t *addr) {
-        free(addr);
-        auto it = std::find(mem.begin(), mem.end(), addr);
-        mem.erase(it);
+    int Malloc(int size) {
+        auto addr = idx;
+        for (int i = 0; i < size; i++) {
+            mem.insert({idx++, 0});
+        }
+        return addr;
     }
 
-    //    void Update(int addr, int val) {
-    //
-    //    }
-    //
-    //    int get(int addr) {
-    //
-    //    }
+    void Free(int addr, int size) {
+        if (isBadAccess(addr))
+            exit(-1);
+
+        for (int i = 0; i < size; i++) {
+            mem.erase(addr + i);
+        }
+    }
+
+    int get(int addr) {
+        if (isBadAccess(addr))
+            exit(-1);
+        return mem[addr];
+    }
+
+    void Update(int addr, int val) {
+        if (isBadAccess(addr))
+            exit(-1);
+        mem[addr] = val;
+    }
 };
 
 
 class Environment {
     std::vector<StackFrame> mStack;
     Heap mHeap;
-    std::map<Decl *, int64_t> gVals;
+    std::map<Decl *, int> gVals;
+    int boundary;  // = 100,    stackFrame.idx < 100   heap.idx >= 100
     cl::FunctionDecl *mFree;/// Declartions to the built-in functions
     cl::FunctionDecl *mMalloc;
     cl::FunctionDecl *mInput;
     cl::FunctionDecl *mOutput;
-
     cl::FunctionDecl *mEntry;
 
 public:
     /// Get the declartions to the built-in functions
-    Environment() : mStack(), mHeap(), gVals(), mFree(NULL), mMalloc(NULL), mInput(NULL), mOutput(NULL), mEntry(NULL) {
+    Environment() : mStack(), mHeap(), gVals(), boundary(100), mFree(NULL), mMalloc(NULL), mInput(NULL), mOutput(NULL), mEntry(NULL) {
         //       mStack.emplace_back(); // 全局frame
     }
 
