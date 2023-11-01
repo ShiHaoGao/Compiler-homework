@@ -99,11 +99,31 @@ public:
 /// Heap maps address to a value
 
 class Heap {
+private:
+    std::vector<int64_t *> mem;
+
 public:
-    int Malloc(int size);
-    void Free(int addr);
-    void Update(int addr, int val);
-    int get(int addr);
+    Heap() : mem() {}
+
+    int64_t *Malloc(int64_t size) {
+        auto *p = (int64_t *) malloc(size);
+        mem.push_back(p);
+        return p;
+    }
+
+    void Free(int64_t *addr) {
+        free(addr);
+        auto it = std::find(mem.begin(), mem.end(), addr);
+        mem.erase(it);
+    }
+
+    //    void Update(int addr, int val) {
+    //
+    //    }
+    //
+    //    int get(int addr) {
+    //
+    //    }
 };
 
 
@@ -178,18 +198,19 @@ public:
 
         if (bop->isAssignmentOp()) {
 
-//            mStack.back().bindStmt(left, rVal);
+            //            mStack.back().bindStmt(left, rVal);
             if (auto *declexpr = dyn_cast<cl::DeclRefExpr>(left)) {
                 cl::Decl *decl = declexpr->getFoundDecl();
                 mStack.back().bindDecl(decl, rVal);
-            }
-            else if (auto *arrExpr = dyn_cast<ArraySubscriptExpr>(left)) {
-                auto* ptr = (int64_t*)mStack.back().getStmtVal(arrExpr->getBase());
+            } else if (auto *arrExpr = dyn_cast<ArraySubscriptExpr>(left)) {
+                auto *ptr = (int64_t *) mStack.back().getStmtVal(arrExpr->getBase());
                 int64_t idx = mStack.back().getStmtVal(arrExpr->getIdx());
                 *(ptr + idx) = rVal;
-            }
-            else if (auto *uop = dyn_cast<UnaryOperator>(left)) {
-
+            } else if (auto *unop = dyn_cast<UnaryOperator>(left)) {
+                // 得到地址，这里和上面一样，需要重新计算地址，因为*a在unaryOp里面计算的是值。
+                auto ptrExpr = unop->getSubExpr();
+                auto ptr = mStack.back().getStmtVal(ptrExpr);
+                *((int64_t *) ptr) = rVal;
             }
             return;
         }
@@ -197,6 +218,19 @@ public:
         // Computing binary operator
         auto bOpc = bop->getOpcode();
         auto lVal = mStack.back().getStmtVal(left);
+
+        // *(a + 2)
+        if (left->getType()->isPointerType() &&
+            right->getType()->isIntegerType()) {
+            assert(bOpc == BO_Add || bOpc == BO_Sub);
+            rVal *= sizeof(int64_t);
+        } else if (left->getType()->isIntegerType() &&
+                   right->getType()->isPointerType()) {
+            assert(bOpc == BO_Add || bOpc == BO_Sub);
+            rVal *= sizeof(int64_t);
+        }
+
+
         int64_t result = 0;
         switch (bOpc) {
             case BO_Add:
@@ -234,6 +268,9 @@ public:
         int64_t result = 0;
         if (unOpc == UO_Minus) {
             result = -rVal;
+        } else if (unOpc == UO_Deref) {
+            // 解引用得到右值。
+            result = *(int64_t *) rVal;
         }
         mStack.back().bindStmt(unop, result);
     }
@@ -245,6 +282,11 @@ public:
             return true;
         else
             return false;
+    }
+
+    bool evalParenthesis(ParenExpr *parenExpr) {
+        auto val = mStack.back().getStmtVal(parenExpr->getSubExpr());
+        mStack.back().bindStmt(parenExpr, val);
     }
 
     void decl(cl::DeclStmt *declstmt) {
@@ -262,7 +304,7 @@ public:
                     mStack.back().bindDeclArr(vardecl, size);
                 }
                 // 变量 int a, int a = 1, int *a, int *a = malloc();
-                // 这四中操作的做法是一样的。
+                // 这四种操作的做法是一样的。
                 else if (type->isIntegerType() || type->isPointerType()) {
                     if (vardecl->hasInit()) {
                         mStack.back().bindDecl(
@@ -328,16 +370,12 @@ public:
         // 与编译器中，将函数视为指针，也保存在expr中是不同的。
         // 究其原因是因为我们写的是解释器，而不是编译器
         if (type->isFunctionPointerType())
-            return ;
+            return;
         if (type->isIntegerType() || type->isPointerType() || type->isConstantArrayType()) {
             cl::Expr *expr = castexpr->getSubExpr();
             int64_t val = mStack.back().getStmtVal(expr);
             mStack.back().bindStmt(castexpr, val);
         }
-        //        else if (castexpr->getType()->isArrayType()) {
-        //            auto expr = castexpr->getSubExpr();
-        //
-        //        }
     }
 
     bool isBuiltinCall(CallExpr *callExpr) {
@@ -349,15 +387,33 @@ public:
         assert(isBuiltinCall(callExpr) == true);
         FunctionDecl *callee = callExpr->getDirectCallee();
         if (callee == mInput) {
-            int val = 0;
+            int64_t val = 0;
             llvm::errs() << "Please Input an Integer Value : ";
-            scanf("%d", &val);
+            scanf("%lld", &val);
             mStack.back().bindStmt(callExpr, val);
         } else if (callee == mOutput) {
             int64_t val = 0;
+            auto *declRef = callExpr->getArg(0);
+            val = mStack.back().getStmtVal(declRef);
+            llvm::errs() << val;
+        } else if (callee == mMalloc) {
+            int64_t val = 0;
             cl::Expr *decl = callExpr->getArg(0);
             val = mStack.back().getStmtVal(decl);
-            llvm::errs() << val;
+            // 向heap申请内存，得到地址返回值
+            int64_t *ptr = mHeap.Malloc(val);
+            // 将地址bindStmt
+            mStack.back().bindStmt(callExpr, (int64_t) ptr);
+            llvm::errs() << "Malloc!\n";
+        } else if (callee == mFree) {
+            // 得到指针
+            auto *declRef = callExpr->getArg(0);
+            auto *ptr = (int64_t *) mStack.back().getStmtVal(declRef);
+            // 调用Free函数
+            mHeap.Free(ptr);
+            llvm::errs() << "Free!\n";
+        } else {
+            llvm::errs() << "Unknown built-in function. \n";
         }
     }
 
@@ -410,9 +466,25 @@ public:
             mStack.back().bindStmt(callExpr, val);
             //        llvm::errs() << "return val : " << val << "\n";
         }
-
     };
-};
 
-class ReturnException : public std::exception {
+    void evalSizeof(UnaryExprOrTypeTraitExpr *sizeofExpr) {
+        UnaryExprOrTypeTrait kind = sizeofExpr->getKind();
+        int64_t result = 0;
+        auto type = sizeofExpr->getTypeOfArgument();
+        if (kind == UETT_SizeOf) {
+            // sizeof(int)
+            if (type->isIntegerType()) {
+                result = 8;
+                //                llvm::errs() << "Sizeof(int)! \n";
+            } else if (type->isPointerType()) {
+                result = 8;
+                //                llvm::errs() << "Sizeof(int*)! \n";
+            } else
+                llvm::errs() << "Unknown sizeof(type)! \n";
+        } else
+            llvm::errs() << "Unknown UnaryExprOrTypeTraitExpr expression. \n";
+
+        mStack.back().bindStmt(sizeofExpr, result);
+    }
 };

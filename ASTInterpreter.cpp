@@ -29,6 +29,16 @@ public:
         mEnv->unOp(unop);
     }
 
+    virtual void VisitParenExpr(ParenExpr *parenExpr) {
+        VisitStmt(parenExpr);
+        mEnv->evalParenthesis(parenExpr);
+    }
+
+    virtual void VisitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr* sizeofExpr) {
+        VisitStmt(sizeofExpr);
+        mEnv->evalSizeof(sizeofExpr);
+    }
+
     virtual void VisitDeclRefExpr(cl::DeclRefExpr *expr) {
         VisitStmt(expr);
         mEnv->declref(expr);
@@ -72,7 +82,6 @@ public:
     virtual void VisitReturnStmt(ReturnStmt *returnStmt) {
         VisitStmt(returnStmt);
         mEnv->callReturn(returnStmt);
-//        throw ReturnException{};
     }
 
     virtual void VisitIfStmt(IfStmt* ifStmt) {
@@ -142,10 +151,10 @@ public:
 
         clang::FunctionDecl *entry = mEnv.getEntry();
 
-        try {
-            mVisitor.VisitStmt(entry->getBody());
-        } catch (ReturnException e) {
-        }
+
+        mVisitor.VisitStmt(entry->getBody());
+
+
     }
 
 private:
