@@ -216,6 +216,9 @@ public:
             mStack.back().bindStmt(literal, (int)literal->getValue().getSExtValue());
             //           llvm::errs() << " 1 \n";
         }
+        else if (auto *literal = dyn_cast<CharacterLiteral>(literalExpr)){
+            mStack.back().bindStmt(literal, (int)literal->getValue());
+        }
     }
 
     /// !TODO Support comparison operation
