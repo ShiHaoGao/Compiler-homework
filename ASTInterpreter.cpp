@@ -10,8 +10,10 @@
 using namespace clang;
 namespace cl = clang;
 
-
 #include "Environment.h"
+
+class ReturnException : std::exception {
+};
 
 class InterpreterVisitor : public clang::EvaluatedExprVisitor<InterpreterVisitor> {
 public:
@@ -34,7 +36,7 @@ public:
         mEnv->evalParenthesis(parenExpr);
     }
 
-    virtual void VisitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr* sizeofExpr) {
+    virtual void VisitUnaryExprOrTypeTraitExpr(UnaryExprOrTypeTraitExpr *sizeofExpr) {
         VisitStmt(sizeofExpr);
         mEnv->evalSizeof(sizeofExpr);
     }
@@ -67,9 +69,15 @@ public:
 
         // 非 builtin call，要建立newframe
         mEnv->call(call);
+
         auto *body = call->getDirectCallee()->getBody();
-        // 转移控制
-        VisitStmt(body);
+        try {
+            // 转移控制
+            if (body)
+                VisitStmt(body);
+        } catch (ReturnException &e) {
+        }
+
         // 控制返回，提取参数，清除frame
         mEnv->freeFrame(call);
     }
@@ -82,9 +90,10 @@ public:
     virtual void VisitReturnStmt(ReturnStmt *returnStmt) {
         VisitStmt(returnStmt);
         mEnv->callReturn(returnStmt);
+        throw ReturnException();
     }
 
-    virtual void VisitIfStmt(IfStmt* ifStmt) {
+    virtual void VisitIfStmt(IfStmt *ifStmt) {
         auto cond = ifStmt->getCond();
         Visit(cond);
 
@@ -93,30 +102,26 @@ public:
             // 如果存在then stmt，则访问
             if (thenStmt)
                 Visit(thenStmt);
-        }
-        else {
+        } else {
             auto elseStmt = ifStmt->getElse();
             // 如果存在else stmt，则访问
             if (elseStmt)
                 Visit(elseStmt);
         }
-
     }
 
-    virtual void VisitWhileStmt(WhileStmt* whileStmt) {
+    virtual void VisitWhileStmt(WhileStmt *whileStmt) {
 
         auto cond = whileStmt->getCond();
         Visit(cond);
         while (mEnv->isCondTrue(cond)) {
-            if (auto* whileBody = whileStmt->getBody())
+            if (auto *whileBody = whileStmt->getBody())
                 Visit(whileBody);
             Visit(cond);
         }
-
-
     }
 
-    virtual void VisitForStmt(ForStmt* forStmt) {
+    virtual void VisitForStmt(ForStmt *forStmt) {
         auto cond = forStmt->getCond();
 
         auto inc = forStmt->getInc();
@@ -127,7 +132,8 @@ public:
         while (mEnv->isCondTrue(cond)) {
             if (auto body = forStmt->getBody())
                 Visit(body);
-            else break;
+            else
+                break;
             if (inc) Visit(inc);
             if (cond) Visit(cond);
         }
@@ -148,13 +154,11 @@ public:
         clang::TranslationUnitDecl *decl = Context.getTranslationUnitDecl();
 
         mEnv.init(decl);// 把runtime的函数和main函数都装入Env中，然后开一个main的frame。
-
-        clang::FunctionDecl *entry = mEnv.getEntry();
-
-
-        mVisitor.VisitStmt(entry->getBody());
-
-
+        FunctionDecl *entry = mEnv.getEntry();
+        try {
+            mVisitor.VisitStmt(entry->getBody());
+        } catch (ReturnException &r) {
+        }
     }
 
 private:
